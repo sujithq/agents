@@ -1,0 +1,16 @@
+# Generated output (gitignored – produced by the pptx-to-video pipeline)
+output/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS metadata
+.DS_Store
+Thumbs.db
