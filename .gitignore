@@ -1,0 +1,64 @@
+# PPTX to Video Conversion - Output Files
+output/
+*.mp4
+*.mp3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment Variables
+.env
+.env.local
+
+# Temporary Files
+*.tmp
+*.bak
+*.log
+/tmp/
+
+# LibreOffice temporary files
+.~lock.*
+
+# FFmpeg temporary files
+*.ffconcat
+concat_list.txt

@@ -1,0 +1,177 @@
+name: PPTX to Video Conversion
+
+on:
+  workflow_dispatch:
+    inputs:
+      pptx_path:
+        description: 'Path to PPTX file in repository'
+        required: true
+        default: 'input/deck.pptx'
+        type: string
+
+jobs:
+  convert-pptx-to-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libreoffice \
+            libreoffice-impress \
+            imagemagick \
+            ffmpeg
+
+          # Verify installations
+          libreoffice --version
+          convert --version
+          ffmpeg -version
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate input PPTX
+        run: |
+          if [ ! -f "${{ inputs.pptx_path }}" ]; then
+            echo "Error: PPTX file not found: ${{ inputs.pptx_path }}"
+            exit 1
+          fi
+          echo "Found PPTX file: ${{ inputs.pptx_path }}"
+          ls -lh "${{ inputs.pptx_path }}"
+
+      - name: Extract slides
+        run: |
+          python .github/skills/pptx-slides-notes/scripts/extract_slides.py \
+            --pptx "${{ inputs.pptx_path }}" \
+            --out output/slides \
+            --width 1920 \
+            --height 1080
+
+      - name: Extract speaker notes
+        run: |
+          python .github/skills/pptx-slides-notes/scripts/extract_notes.py \
+            --pptx "${{ inputs.pptx_path }}" \
+            --out output/notes
+
+      - name: List extracted files
+        run: |
+          echo "Extracted slides:"
+          ls -lh output/slides/
+          echo ""
+          echo "Extracted notes:"
+          ls -lh output/notes/
+
+      - name: Generate video clips with Sora 2
+        env:
+          SORA_ENDPOINT: ${{ secrets.SORA_ENDPOINT }}
+          SORA_API_KEY: ${{ secrets.SORA_API_KEY }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          python .github/skills/sora2-video/scripts/sora_generate.py \
+            --slides output/slides \
+            --notes output/notes \
+            --out output/video/clips \
+            --duration 8
+
+      - name: Poll Sora 2 jobs and download clips
+        env:
+          SORA_ENDPOINT: ${{ secrets.SORA_ENDPOINT }}
+          SORA_API_KEY: ${{ secrets.SORA_API_KEY }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          python .github/skills/sora2-video/scripts/poll_jobs.py \
+            --manifest output/video/manifest.json \
+            --out output/video/clips \
+            --timeout 3600 \
+            --interval 15
+
+      - name: Stitch video clips
+        run: |
+          bash .github/skills/sora2-video/scripts/stitch_ffmpeg.sh \
+            output/video/clips \
+            output/video/final.mp4
+
+      - name: Verify final video
+        run: |
+          if [ -f output/video/final.mp4 ]; then
+            echo "✓ Final video created successfully"
+            ls -lh output/video/final.mp4
+
+            # Show video details
+            ffprobe -v error \
+              -show_entries format=duration,size \
+              -show_entries stream=width,height,codec_name \
+              -of default=noprint_wrappers=1 \
+              output/video/final.mp4
+          else
+            echo "Error: Final video not created"
+            exit 1
+          fi
+
+      - name: Verify manifest
+        run: |
+          if [ -f output/video/manifest.json ]; then
+            echo "✓ Manifest file exists"
+            echo ""
+            echo "Manifest contents:"
+            cat output/video/manifest.json | jq '.'
+          else
+            echo "Error: Manifest file not created"
+            exit 1
+          fi
+
+      - name: Upload video artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pptx-video-output
+          path: |
+            output/video/
+            output/slides/
+            output/notes/
+          retention-days: 30
+
+      - name: Upload final video (separate artifact)
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: final-video
+          path: output/video/final.mp4
+          retention-days: 90
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f output/video/manifest.json ]; then
+            total_slides=$(jq '.total_slides' output/video/manifest.json)
+            completed=$(jq '.completed_slides // 0' output/video/manifest.json)
+
+            echo "- **Total slides**: $total_slides" >> $GITHUB_STEP_SUMMARY
+            echo "- **Completed**: $completed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -f output/video/final.mp4 ]; then
+            size=$(du -h output/video/final.mp4 | cut -f1)
+            echo "- **Final video size**: $size" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Video conversion completed successfully!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Video conversion failed" >> $GITHUB_STEP_SUMMARY
+          fi
