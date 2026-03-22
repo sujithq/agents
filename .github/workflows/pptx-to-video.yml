@@ -1,0 +1,101 @@
+name: PPTX to Sora 2 Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      pptx_path:
+        description: "Path to the .pptx file (relative to repo root)"
+        required: false
+        default: "input/deck.pptx"
+      duration_seconds:
+        description: "Duration of each per-slide clip in seconds"
+        required: false
+        default: "5"
+      poll_interval:
+        description: "Sora job poll interval in seconds"
+        required: false
+        default: "15"
+      poll_timeout:
+        description: "Maximum time (seconds) to wait for all Sora jobs"
+        required: false
+        default: "1800"
+
+jobs:
+  pptx-to-video:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install system dependencies (LibreOffice + ffmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libreoffice ffmpeg
+
+      - name: Extract slides to PNG
+        run: |
+          python .github/skills/pptx-slides-notes/scripts/extract_slides.py \
+            --pptx "${{ github.event.inputs.pptx_path }}" \
+            --out  output/slides
+
+      - name: Extract speaker notes to TXT
+        run: |
+          python .github/skills/pptx-slides-notes/scripts/extract_notes.py \
+            --pptx "${{ github.event.inputs.pptx_path }}" \
+            --out  output/notes
+
+      - name: Submit Sora 2 video generation jobs
+        env:
+          SORA_ENDPOINT: ${{ secrets.SORA_ENDPOINT }}
+          SORA_API_KEY: ${{ secrets.SORA_API_KEY }}
+          SORA_DEPLOYMENT: ${{ secrets.SORA_DEPLOYMENT }}
+        run: |
+          python .github/skills/sora2-video/scripts/sora_generate.py \
+            --slides-dir output/slides \
+            --notes-dir  output/notes \
+            --manifest   output/video/manifest.json \
+            --duration   "${{ github.event.inputs.duration_seconds }}" \
+            --pptx       "${{ github.event.inputs.pptx_path }}"
+
+      - name: Poll Sora jobs and download clips
+        env:
+          SORA_ENDPOINT: ${{ secrets.SORA_ENDPOINT }}
+          SORA_API_KEY: ${{ secrets.SORA_API_KEY }}
+        run: |
+          python .github/skills/sora2-video/scripts/poll_jobs.py \
+            --manifest  output/video/manifest.json \
+            --clips-dir output/video/clips \
+            --interval  "${{ github.event.inputs.poll_interval }}" \
+            --timeout   "${{ github.event.inputs.poll_timeout }}"
+
+      - name: Stitch clips into final.mp4
+        run: |
+          bash .github/skills/sora2-video/scripts/stitch_ffmpeg.sh \
+            output/video/clips \
+            output/video/final.mp4
+
+      - name: Upload video output as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-output
+          path: output/video/
+          if-no-files-found: error
+          retention-days: 30
